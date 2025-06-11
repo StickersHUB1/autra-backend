@@ -8,12 +8,9 @@ require('dotenv').config();
 const app = express();
 
 // Middleware
-app.use(cors({
-  origin: 'https://stickershub1.github.io',
-  methods: ['GET', 'POST'],
-  allowedHeaders: ['Content-Type']
-}));
+app.use(cors());
 app.use(express.json());
+app.use(express.static(path.join(__dirname, '.')));
 
 // Conexión a MongoDB
 const uri = process.env.MONGO_URI || 'mongodb://localhost:27017';
@@ -31,15 +28,7 @@ async function connectDB() {
 }
 connectDB();
 
-// Protección para métodos no permitidos en /api/*
-app.all('/api/*', (req, res, next) => {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ success: false, message: 'Method Not Allowed' });
-  }
-  next();
-});
-
-// Ruta de login con trazabilidad completa
+// Ruta de login
 app.post('/api/login', async (req, res) => {
   const { studentCode, password } = req.body;
   console.log('--- LOGIN ATTEMPT ---');
@@ -61,9 +50,6 @@ app.post('/api/login', async (req, res) => {
       return res.json({ success: false, message: 'Credenciales inválidas' });
     }
 
-    console.log('✅ Usuario encontrado. Hash guardado en DB:', user.password);
-    console.log('🔐 Comparando contra contraseña ingresada:', password);
-
     const isMatch = await bcrypt.compare(password, user.password);
     console.log('🧪 Resultado de bcrypt.compare:', isMatch);
 
@@ -71,9 +57,6 @@ app.post('/api/login', async (req, res) => {
       console.log('🟢 Login exitoso:', user.studentCode);
       return res.json({ success: true, studentCode: user.studentCode });
     } else {
-      console.warn('🔴 Contraseña incorrecta');
-      console.warn('👉 Contraseña ingresada:', password);
-      console.warn('👉 Hash en DB:', user.password);
       return res.json({ success: false, message: 'Credenciales inválidas' });
     }
 
@@ -83,8 +66,62 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
+// Ruta para guardar anotaciones y campos
+app.post('/api/save-page', async (req, res) => {
+  const { studentCode, page, formFields, annotation } = req.body;
+  if (!studentCode || !page) {
+    return res.status(400).json({ success: false, message: 'Datos incompletos' });
+  }
+
+  try {
+    const db = client.db('autra');
+    const collection = db.collection('pageData');
+
+    await collection.updateOne(
+      { studentCode, page },
+      { $set: { formFields, annotation, updatedAt: new Date() } },
+      { upsert: true }
+    );
+
+    console.log(`💾 Guardado página ${page} para ${studentCode}`);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('❌ Error guardando página:', err);
+    res.status(500).json({ success: false, message: 'Error al guardar' });
+  }
+});
+
+// Ruta para cargar anotaciones y campos
+app.get('/api/load-page', async (req, res) => {
+  const { studentCode, page } = req.query;
+  if (!studentCode || !page) {
+    return res.status(400).json({ success: false, message: 'Parámetros faltantes' });
+  }
+
+  try {
+    const db = client.db('autra');
+    const data = await db.collection('pageData').findOne({ studentCode, page: parseInt(page) });
+
+    if (!data) return res.json({ success: true, formFields: {}, annotation: null });
+
+    console.log(`📤 Cargando página ${page} para ${studentCode}`);
+    res.json({ success: true, formFields: data.formFields || {}, annotation: data.annotation || null });
+  } catch (err) {
+    console.error('❌ Error cargando página:', err);
+    res.status(500).json({ success: false, message: 'Error al cargar' });
+  }
+});
+
+// Ruta raíz
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, '/login.html'));
+});
+
+// SPA fallback
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'index.html'));
+});
+
 // Iniciar servidor
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`🚀 Servidor activo en http://localhost:${PORT}`);
-});
+app.listen(PORT, () => console.log(`🚀 Servidor activo en http://localhost:${PORT}`));
