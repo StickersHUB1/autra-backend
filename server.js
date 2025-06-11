@@ -8,9 +8,12 @@ require('dotenv').config();
 const app = express();
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: 'https://stickershub1.github.io',
+  methods: ['GET', 'POST'],
+  allowedHeaders: ['Content-Type']
+}));
 app.use(express.json());
-app.use(express.static(path.join(__dirname, '.')));
 
 // Conexión a MongoDB
 const uri = process.env.MONGO_URI || 'mongodb://localhost:27017';
@@ -27,6 +30,14 @@ async function connectDB() {
   }
 }
 connectDB();
+
+// Protección para métodos no permitidos en /api/*
+app.all('/api/*', (req, res, next) => {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ success: false, message: 'Method Not Allowed' });
+  }
+  next();
+});
 
 // Ruta de login con trazabilidad completa
 app.post('/api/login', async (req, res) => {
@@ -63,7 +74,6 @@ app.post('/api/login', async (req, res) => {
       console.warn('🔴 Contraseña incorrecta');
       console.warn('👉 Contraseña ingresada:', password);
       console.warn('👉 Hash en DB:', user.password);
-      console.warn('🧾 Verifica que el hash fue generado exactamente desde esta contraseña');
       return res.json({ success: false, message: 'Credenciales inválidas' });
     }
 
@@ -73,16 +83,8 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// Ruta raíz para login.html
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, '/login.html'));
-});
-
-// Fallback para SPA
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'index.html'));
-});
-
 // Iniciar servidor
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Servidor activo en http://localhost:${PORT}`));
+app.listen(PORT, () => {
+  console.log(`🚀 Servidor activo en http://localhost:${PORT}`);
+});
