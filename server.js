@@ -3,6 +3,7 @@ const path = require('path');
 const cors = require('cors');
 const { MongoClient } = require('mongodb');
 const bcrypt = require('bcrypt');
+const crypto = require('crypto');
 require('dotenv').config();
 
 const app = express();
@@ -28,62 +29,67 @@ async function connectDB() {
 }
 connectDB();
 
-// Ruta de login
+// ===============================
+// 🔐 LOGIN
+// ===============================
 app.post('/api/login', async (req, res) => {
   const { studentCode, password } = req.body;
   console.log('--- LOGIN ATTEMPT ---');
-  console.log('📥 Recibido desde frontend -> studentCode:', studentCode, '| password:', password);
+  console.log('📥 Recibido ->', studentCode);
 
   if (!studentCode || !password) {
-    console.warn('⚠️ Faltan datos en la petición');
     return res.status(400).json({ success: false, message: 'Faltan datos' });
   }
 
   try {
     const db = client.db('autra');
     const normalizedCode = studentCode.toUpperCase();
-    console.log('🔍 Buscando en MongoDB -> studentCode:', normalizedCode);
 
-    const user = await db.collection('users').findOne({ studentCode: normalizedCode });
+    const user = await db
+      .collection('users')
+      .findOne({ studentCode: normalizedCode });
+
     if (!user) {
-      console.warn('⛔ Usuario no encontrado:', normalizedCode);
       return res.json({ success: false, message: 'Credenciales inválidas' });
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
-    console.log('🧪 Resultado de bcrypt.compare:', isMatch);
 
-    if (isMatch) {
-      console.log('🟢 Login exitoso:', user.studentCode);
-      return res.json({ success: true, studentCode: user.studentCode });
-    } else {
+    if (!isMatch) {
       return res.json({ success: false, message: 'Credenciales inválidas' });
     }
 
+    return res.json({ success: true, studentCode: user.studentCode });
   } catch (error) {
-    console.error('🔥 Error en proceso de login:', error);
-    return res.status(500).json({ success: false, message: 'Error en el servidor' });
+    console.error('🔥 Error en login:', error);
+    return res.status(500).json({ success: false, message: 'Error servidor' });
   }
 });
 
-// Ruta para guardar anotaciones y campos
+// ===============================
+// 💾 GUARDAR PÁGINA
+// ===============================
 app.post('/api/save-page', async (req, res) => {
   const { studentCode, page, formFields, annotation } = req.body;
+
   if (!studentCode || !page) {
     return res.status(400).json({ success: false, message: 'Datos incompletos' });
   }
 
   try {
     const db = client.db('autra');
-    const collection = db.collection('pageData');
-
-    await collection.updateOne(
+    await db.collection('pageData').updateOne(
       { studentCode, page },
-      { $set: { formFields, annotation, updatedAt: new Date() } },
+      {
+        $set: {
+          formFields,
+          annotation,
+          updatedAt: new Date()
+        }
+      },
       { upsert: true }
     );
 
-    console.log(`💾 Guardado página ${page} para ${studentCode}`);
     res.json({ success: true });
   } catch (err) {
     console.error('❌ Error guardando página:', err);
@@ -91,37 +97,90 @@ app.post('/api/save-page', async (req, res) => {
   }
 });
 
-// Ruta para cargar anotaciones y campos
+// ===============================
+// 📤 CARGAR PÁGINA
+// ===============================
 app.get('/api/load-page', async (req, res) => {
   const { studentCode, page } = req.query;
+
   if (!studentCode || !page) {
     return res.status(400).json({ success: false, message: 'Parámetros faltantes' });
   }
 
   try {
     const db = client.db('autra');
-    const data = await db.collection('pageData').findOne({ studentCode, page: parseInt(page) });
+    const data = await db
+      .collection('pageData')
+      .findOne({ studentCode, page: parseInt(page) });
 
-    if (!data) return res.json({ success: true, formFields: {}, annotation: null });
+    if (!data) {
+      return res.json({ success: true, formFields: {}, annotation: null });
+    }
 
-    console.log(`📤 Cargando página ${page} para ${studentCode}`);
-    res.json({ success: true, formFields: data.formFields || {}, annotation: data.annotation || null });
+    res.json({
+      success: true,
+      formFields: data.formFields || {},
+      annotation: data.annotation || null
+    });
   } catch (err) {
     console.error('❌ Error cargando página:', err);
     res.status(500).json({ success: false, message: 'Error al cargar' });
   }
 });
 
-// Ruta raíz
+// ===============================
+// 🎥 ZOOM SDK – SIGNATURE
+// ===============================
+app.get('/api/zoom-signature', (req, res) => {
+  const { meetingNumber, role } = req.query;
+
+  if (!meetingNumber) {
+    return res.status(400).json({ error: 'meetingNumber requerido' });
+  }
+
+  const iat = Math.floor(Date.now() / 1000) - 30;
+  const exp = iat + 60 * 60 * 2;
+
+  const payload = {
+    sdkKey: process.env.ZOOM_SDK_KEY,
+    mn: meetingNumber,
+    role: Number(role || 0),
+    iat,
+    exp,
+    appKey: process.env.ZOOM_SDK_KEY,
+    tokenExp: exp
+  };
+
+  const header = { alg: 'HS256', typ: 'JWT' };
+
+  const base64 = obj =>
+    Buffer.from(JSON.stringify(obj)).toString('base64url');
+
+  const data = `${base64(header)}.${base64(payload)}`;
+
+  const signature = crypto
+    .createHmac('sha256', process.env.ZOOM_SDK_SECRET)
+    .update(data)
+    .digest('base64url');
+
+  res.json({ signature: `${data}.${signature}` });
+});
+
+// ===============================
+// 🌐 FRONTEND
+// ===============================
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, '/login.html'));
 });
 
-// SPA fallback
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-// Iniciar servidor
+// ===============================
+// 🚀 START
+// ===============================
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Servidor activo en http://localhost:${PORT}`));
+app.listen(PORT, () =>
+  console.log(`🚀 Servidor activo en http://localhost:${PORT}`)
+);
